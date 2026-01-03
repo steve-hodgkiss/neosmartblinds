@@ -1,0 +1,51 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Neo Smart Blinds Controller",
+        "description": "Enter your Neo Smart Blinds controller details",
+        "data": {
+          "host": "Controller IP Address",
+          "id": "Controller ID",
+          "name": "Controller Name"
+        },
+        "submit": "Next"
+      },
+      "add_blinds": {
+        "title": "Add Blinds",
+        "description": "Configure your blinds\n\n**Currently added blinds:**\n{blinds_list}\n\nEnter the blind ID and name below:",
+        "data": {
+          "blind_id": "Blind ID",
+          "name": "Blind Name",
+          "add_another": "Add another blind?"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Neo Smart Blinds",
+        "description": "Update controller settings",
+        "data": {
+          "host": "Controller IP Address",
+          "id": "Controller ID",
+          "name": "Controller Name"
+        },
+        "submit": "Next"
+      },
+      "manage_blinds": {
+        "title": "Manage Blinds",
+        "description": "Add or remove blinds\n\n**Currently configured blinds:**\n{blinds_list}",
+        "data": {
+          "action": "Action",
+          "blind_id": "Blind ID",
+          "name": "Blind Name"
+        }
+      }
+    },
+    "error": {
+      "blind_already_exists": "This blind ID is already configured"
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "reconfigure_successful": "Blinds updated successfully"
+    }
+  }
+}

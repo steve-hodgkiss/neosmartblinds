@@ -1,9 +1,12 @@
 {
   "domain": "neosmartblinds",
   "name": "Neo Smart Blinds",
-  "documentation": "",
-  "dependencies": [],
   "codeowners": [],
-  "version": 1.1,
-  "requirements": []
+  "config_flow": true,
+  "device_automation": {
+    "action_type": ["neosmartblinds"]
+  },
+  "documentation": "https://github.com/yourusername/neosmartblinds",
+  "requirements": ["requests"],
+  "version": "1.0.0"
 }

@@ -1,180 +1,219 @@
-"""Support for NeoSmartBlinds covers."""
+"""Support for NeoSmartBlinds covers.
+
+This module provides cover entities for controlling Neo Smart Blinds
+through their local HTTP API. It handles setup, entity management,
+and communication with the controller.
+"""
+
 import logging
+from typing import Any
 
 import requests
-import voluptuous as vol
 
 from homeassistant.components.cover import (
-    PLATFORM_SCHEMA,
     CoverEntity,
-    SUPPORT_OPEN,
-    SUPPORT_CLOSE,
-    SUPPORT_STOP,
+    CoverEntityFeature,
+    CoverDeviceClass,
 )
 from homeassistant.const import (
-    ATTR_ENTITY_ID,
     CONF_NAME,
     CONF_HOST,
     CONF_ID,
     CONF_DEVICES,
 )
-
-from homeassistant.helpers import config_validation as cv
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers import entity_registry as er
 
 _LOGGER = logging.getLogger(__name__)
-supported_features = SUPPORT_OPEN | SUPPORT_CLOSE | SUPPORT_STOP
 
-# api call is http://{ip address}:8838/neo/v1/transmit?command={blind id}-{command}&id={controller id (24 chars)}'
-# commands are up (UP), dn (DOWN) and sp (STOP)
-
-############
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Required(CONF_HOST): cv.string,
-        vol.Required(CONF_ID): cv.string,
-        vol.Optional(CONF_DEVICES, default={}): {
-            cv.string: vol.Schema({vol.Required(CONF_NAME): cv.string,})
-        },
-    }
+DOMAIN = "neosmartblinds"
+supported_features = (
+    CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
 )
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
-    """Set up the NEOSMARTBLINDS global variables."""
-    controller_host = config.get(CONF_HOST)
-    controller_id = config.get(CONF_ID)
-    """Set up the NEOSMARTBLINDS covers."""
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up NeoSmartBlinds covers from config entry.
+
+    Creates cover entities for each configured blind and removes
+    entities for blinds that have been deleted from the configuration.
+
+    Args:
+        hass: Home Assistant instance
+        config_entry: Config entry object
+        async_add_entities: Callback to add new entities
+    """
+    config_data = config_entry.data
+    controller_host = config_data.get(CONF_HOST)
+    controller_id = config_data.get(CONF_ID)
+    devices = config_data.get(CONF_DEVICES, {})
+
+    # Clean up removed entities from entity registry
+    entity_registry = er.async_get(hass)
+    for entity_id in list(entity_registry.entities):
+        entity_entry = entity_registry.entities[entity_id]
+        if (
+            entity_entry.config_entry_id == config_entry.entry_id
+            and entity_entry.domain == "cover"
+        ):
+            # Extract blind_id from unique_id
+            unique_id = entity_entry.unique_id
+            if unique_id and unique_id.startswith(f"{DOMAIN}_"):
+                blind_id = unique_id.split("_", 2)[2]  # Extract blind_id from unique_id
+                if blind_id not in devices:
+                    # Blind was removed, delete the entity
+                    entity_registry.async_remove(entity_id)
+                    _LOGGER.info("Removed entity for blind %s", blind_id)
+
     covers = []
-    devices = config.get(CONF_DEVICES)
     if devices:
-        for _, entity_info in devices.items():
+        for blind_id, entity_info in devices.items():
             name = entity_info.get(CONF_NAME)
-            id = _
-            _LOGGER.info("Adding %s neosmartblinds cover", name, " ", id)
+            _LOGGER.info("Adding %s neosmartblinds cover", name)
             cover = NeoSmartBlindsCover(
-                hass,
-                id=id,
+                hass=hass,
+                blind_id=blind_id,
                 name=name,
                 controller_host=controller_host,
                 controller_id=controller_id,
+                config_entry=config_entry,
             )
             covers.append(cover)
 
-    if not covers:
-        _LOGGER.error("No covers added")
-        return False
+    if covers:
+        async_add_entities(covers)
+    else:
+        _LOGGER.warning("No covers configured for entry")
 
-    add_entities(covers)
 
-
-#########################
 class NeoSmartBlindsCover(CoverEntity):
-    """Representation of NEOSMARTBLINDS cover."""
+    """Representation of NeoSmartBlinds cover.
 
-    def __init__(self, hass, name, controller_host, id, controller_id):
-        """Initialize the cover."""
-        self._id = id
+    Provides control over a single blind via the Neo Smart Blinds
+    controller API.
+    """
+
+    _attr_supported_features = supported_features
+    _attr_device_class = CoverDeviceClass.BLIND
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        name: str,
+        controller_host: str,
+        blind_id: str,
+        controller_id: str,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the cover.
+
+        Args:
+            hass: Home Assistant instance
+            name: Friendly name for the blind
+            controller_host: IP address of the controller
+            blind_id: Unique identifier for the blind
+            controller_id: 24-character controller ID
+            config_entry: Config entry object
+        """
+        self._blind_id = blind_id
         self._hass = hass
         self._name = name
         self._controller_host = controller_host
         self._controller_id = controller_id
         self._available = True
-        self._device_class = None
-        self._is_closed = None
-        self._state = None
+        self._is_closed: bool | None = None
+        self._config_entry = config_entry
 
     @property
-    def should_poll(self):
-        """Return the polling state. No polling available from controller."""
-        return False
-
-    @property
-    def name(self):
+    def name(self) -> str:
         """Return the name of the cover."""
         return self._name
 
     @property
-    def available(self):
+    def unique_id(self) -> str:
+        """Return a unique id for the entity."""
+        return f"{DOMAIN}_{self._config_entry.entry_id}_{self._blind_id}"
+
+    @property
+    def available(self) -> bool:
         """Return True if entity is available."""
         return self._available
 
     @property
-    def is_closed(self):
-        """Return None as no state from controller."""
-        return None
+    def is_closed(self) -> bool | None:
+        """Return the closed state of the blind.
+        
+        Returns None as the controller does not report blind position.
+        """
+        return self._is_closed
 
     @property
-    def id(self):
-        """Return the id of the cover."""
-        return self._id
-
-    @property
-    def name(self):
-        """Return the name of the cover."""
-        return self._name
-
-    @property
-    def unique_id(self):
-        """Return a unique id for the entity"""
-        return "neosmartblinds" + "." + self._id 
-
-    @property
-    def should_poll(self):
+    def should_poll(self) -> bool:
         """Return the polling state. No polling available from controller."""
         return False
 
     @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
+    def device_info(self) -> DeviceInfo:
+        """Return the device info."""
+        controller_name = self._config_entry.data.get(CONF_NAME, "Neo Smart Blinds Controller")
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._config_entry.entry_id)},
+            name=controller_name,
+            manufacturer="Neo Smart Blinds",
+            model="Controller",
+        )
 
-    @property
-    def is_closed(self):
-        """Return None as no state from controller."""
-        return None
-
-    @property
-    def device_class(self):
-        """Return the class of this device, from component DEVICE_CLASSES."""
-        return self._device_class
-
-    @property
-    def supported_features(self):
-        """Flag supported features."""
-        return supported_features
-
-    def close_cover(self, **kwargs):
+    def close_cover(self, **kwargs: Any) -> None:
         """Close the cover."""
-        self.move_cover(self, command="dn")
+        self._move_cover(command="dn")
 
-    def open_cover(self, **kwargs):
+    def open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
-        self.move_cover(self, command="up")
+        self._move_cover(command="up")
 
-    def stop_cover(self, **kwargs):
+    def stop_cover(self, **kwargs: Any) -> None:
         """Stop the cover."""
-        self.move_cover(self, command="sp")
+        self._move_cover(command="sp")
 
-    @staticmethod
-    def move_cover(self, command):
-        """Build the uri and execute the actual commands."""
-        httpuri = f"http://{self._controller_host}:8838/neo/v1/transmit?command={self._id}-{command}&id={self._controller_id}"
-        request = requests.get(httpuri)
-        if request.status_code != 200:
-            if request.status_code == "400":
-                response = "400: Blind ID incorrect"
-            elif request.status_code == "401":
-                response = "401: Controller ID incorrect"
+    def _move_cover(self, command: str) -> bool:
+        """Build the URI and execute the blind command.
+
+        Makes an HTTP GET request to the controller to send a command
+        to the blind. Updates the availability status based on success.
+
+        Args:
+            command: Command to send ('up', 'dn', or 'sp')
+
+        Returns:
+            True on completion (success or failure)
+        """
+        httpuri = f"http://{self._controller_host}:8838/neo/v1/transmit?command={self._blind_id}-{command}&id={self._controller_id}"
+        try:
+            request = requests.get(httpuri, timeout=10)
+            if request.status_code != 200:
+                response = f"{request.status_code}: {request.text}"
+                _LOGGER.error(
+                    "Error executing command on %s: %s-%s - Status: %s",
+                    self._controller_host,
+                    self._blind_id,
+                    command,
+                    response,
+                )
+                self._available = False
             else:
-                response = request.status_code
-
-            _LOGGER.debug(
-                "Error executing: %s %s-%s %s - return code: %s",
+                self._available = True
+        except requests.exceptions.RequestException as err:
+            _LOGGER.error(
+                "Error connecting to controller %s: %s",
                 self._controller_host,
-                self._id,
-                command,
-                self._controller_id,
-                response,
+                err,
             )
             self._available = False
         return True
